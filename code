@@ -1,0 +1,126 @@
+CREATE VIEW `Students.v_chumak_modul_task` AS
+
+
+WITH main_tab AS (
+SELECT
+    a.id,
+    s.date,
+    sp.country,
+    a.send_interval,
+    a.is_verified,
+    a.is_unsubscribed
+FROM `DA.account` a
+JOIN `DA.account_session` ac ON a.id = ac.account_id
+JOIN `DA.session` s ON ac.ga_session_id = s.ga_session_id
+JOIN `DA.session_params` sp ON s.ga_session_id = sp.ga_session_id
+),
+
+
+
+
+account_cnt AS (
+SELECT
+    date,
+    country,
+    send_interval,
+    is_verified,
+    is_unsubscribed,
+    COUNT(id) AS account_cnt
+FROM main_tab
+GROUP BY date, country, send_interval, is_verified, is_unsubscribed
+),
+
+
+
+
+message_metrics AS (
+SELECT
+    DATE_ADD(main_tab.date, INTERVAL es.sent_date DAY) AS sent_date,
+    main_tab.country,
+    main_tab.send_interval,
+    main_tab.is_verified,
+    main_tab.is_unsubscribed,
+    COUNT(DISTINCT es.id_message) AS sent_msg,
+    COUNT(DISTINCT eo.id_message) AS open_msg,
+    COUNT(DISTINCT ev.id_message) AS visit_msg
+FROM `DA.email_sent` es
+JOIN main_tab ON main_tab.id = es.id_account
+LEFT JOIN `DA.email_open` eo ON es.id_message = eo.id_message
+LEFT JOIN `DA.email_visit` ev ON es.id_message = ev.id_message
+GROUP BY sent_date, main_tab.country, main_tab.send_interval, main_tab.is_verified, main_tab.is_unsubscribed
+),
+
+
+total_country_metrics AS (
+  SELECT
+    country,
+    SUM(account_cnt) AS total_country_account_cnt,
+    SUM(sent_msg) AS total_country_sent_cnt
+  FROM (
+    SELECT country, COUNT(id) AS account_cnt, 0 AS sent_msg
+    FROM main_tab
+    GROUP BY country
+    UNION ALL
+    SELECT country, 0 AS account_cnt, COUNT(id_message) AS sent_msg
+    FROM `DA.email_sent`
+    JOIN main_tab ON main_tab.id = id_account
+    GROUP BY country
+  ) country_metrics
+  GROUP BY country
+),
+
+
+ranked_metrics AS (
+  SELECT
+    *,
+    RANK() OVER (ORDER BY total_country_account_cnt DESC) AS rank_total_country_account_cnt,
+    RANK() OVER (ORDER BY total_country_sent_cnt DESC) AS rank_total_country_sent_cnt
+  FROM total_country_metrics
+)
+
+
+SELECT
+    account_cnt.date,
+    account_cnt.country,
+    account_cnt.send_interval,
+    account_cnt.is_verified,
+    account_cnt.is_unsubscribed,
+    account_cnt.account_cnt,
+    0 AS sent_msg,
+    0 AS open_msg,
+    0 AS visit_msg,
+    total_country_metrics.total_country_account_cnt,
+    total_country_metrics.total_country_sent_cnt,
+    ranked_metrics.rank_total_country_account_cnt,
+    ranked_metrics.rank_total_country_sent_cnt
+FROM account_cnt
+JOIN total_country_metrics ON account_cnt.country = total_country_metrics.country
+JOIN ranked_metrics ON account_cnt.country = ranked_metrics.country
+WHERE ranked_metrics.rank_total_country_account_cnt <= 10 OR ranked_metrics.rank_total_country_sent_cnt <= 10
+
+
+UNION ALL
+
+
+SELECT
+    message_metrics.sent_date AS date,
+    message_metrics.country,
+    message_metrics.send_interval,
+    message_metrics.is_verified,
+    message_metrics.is_unsubscribed,
+    0 AS account_cnt,
+    message_metrics.sent_msg,
+    message_metrics.open_msg,
+    message_metrics.visit_msg,
+    total_country_metrics.total_country_account_cnt,
+    total_country_metrics.total_country_sent_cnt,
+    ranked_metrics.rank_total_country_account_cnt,
+    ranked_metrics.rank_total_country_sent_cnt
+FROM message_metrics
+JOIN total_country_metrics ON message_metrics.country = total_country_metrics.country
+JOIN ranked_metrics ON message_metrics.country = ranked_metrics.country
+WHERE ranked_metrics.rank_total_country_account_cnt <= 10 OR ranked_metrics.rank_total_country_sent_cnt <= 10
+
+
+link to the document
+https://docs.google.com/document/d/1gsx7va9EyW7WozpCAwdq4nhaDq-LVrbtW-pCUSq3py0/edit?usp=sharing
